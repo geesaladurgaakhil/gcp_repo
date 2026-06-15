@@ -3,16 +3,205 @@ name: python cicd to gke
 on:
   workflow_dispatch: 
 
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: ${{ secrets.GCP_REGION }}
+  REPOSITORY: ${{ secrets.GAR_REPOSITORY }}
+  IMAGE_NAME: python-app
+
+##################################################
+# SonarQube
+##################################################
 jobs:
+
+  # sonarqube:
+
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+
+  #   - name: Checkout Code
+  #     uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+  #     with:
+  #       fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysi
+
+  #   - name: SonarQube Scan
+  #     # uses: SonarSource/sonarqube-scan-action@v5
+  #     # env:
+  #     #   SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  #     #   SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  #     uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+  #     env:
+  #       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  #       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+##################################################
+# Authenticate to GCP
+##################################################
+
   build:
+
+    # needs: sonarqube
+
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       id-token: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
     steps:
-      - uses: actions/checkout@v4
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/717948519217/locations/global/workloadIdentityPools/github-pool1/providers/github-provider"
-          service_account: "githubactions-sa@project-125a5906-9774-4549-bad.iam.gserviceaccount.com"
+
+    - uses: actions/checkout@v4
+
+    - id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+    - uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker
+      run: |
+        gcloud auth configure-docker \
+        ${{ env.REGION }}-docker.pkg.dev
+
+    - name: Build Image
+      run: |
+        docker build -t \
+        ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+    - name: Push Image
+      run: |
+        docker push \
+        ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/python-app:${{ github.sha }}
+        
+    - name: Install Trivy
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/python-app:${{ github.sha }}
+        format: table
+        # exit-code: '1'
+        # severity: HIGH,CRITICAL
+        
+    - id: meta
+      run: |
+        echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+        
+##################################################
+# Push Image
+# ##################################################
+
+#   push:
+
+#     needs: build
+    
+#     runs-on: ubuntu-latest
+
+#     permissions:
+#       contents: read
+#       id-token: write
+
+#     steps:
+
+#     - uses: actions/checkout@v4
+
+#     - id: auth
+#       uses: google-github-actions/auth@v2
+#       with:
+#         workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+#         service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+#     - uses: google-github-actions/setup-gcloud@v2
+
+#     - name: Configure Docker
+#       run: |
+#         gcloud auth configure-docker \
+#         ${{ secrets.GCP_REGION }}-docker.pkg.dev
+
+#     # - name: Build image
+#     #   run: |
+#     #     docker build -t \
+#     #     ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/imagereigstry:${{ github.sha }} .
+
+#     - name: Push Image
+#       run: |
+#         docker push \
+#         ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/python-app:${{ github.sha }}
+
+##################################################
+# Trivy Scan
+##################################################
+
+  # trivy:
+
+  #   needs: build
+
+  #   runs-on: ubuntu-latest
+
+  #   permissions:
+  #     contents: read
+
+  #   steps:
+
+  #   - uses: actions/checkout@v4
+
+  #   - name: Install Trivy
+  #     uses: aquasecurity/trivy-action@master
+  #     with:
+  #       image-ref: |
+  #         ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/python-app:${{ github.sha }}
+  #       format: table
+  #       exit-code: '1'
+  #       severity: HIGH,CRITICAL
+
+##################################################
+# Deploy to GKE
+##################################################
+
+  deploy:
+
+    needs: build
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+    - uses: google-github-actions/setup-gcloud@v2
+
+    - name: Get Cluster Credentials
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: ${{ secrets.GKE_CLUSTER }}
+        location: ${{ secrets.GKE_REGION }}
+
+    - name: Replace Image Tag
+      run: |
+        sed -i "s/latest/${{ github.sha }}/g" deployment.yml
+        cat deployment.yml
+
+    - name: Deploy
+      run: |
+        kubectl apply -f deployment.yml
+        kubectl apply -f service.yml
+
+    - name: Verify
+      run: |
+        kubectl get pods
+        kubectl get svc
