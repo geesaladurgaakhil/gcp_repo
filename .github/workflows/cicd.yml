@@ -16,3 +16,7 @@ jobs:
         with:
           workload_identity_provider: "projects/717948519217/locations/global/workloadIdentityPools/github-pool1/providers/github-provider"
           service_account: "githubactions-sa@project-125a5906-9774-4549-bad.iam.gserviceaccount.com"
+      - name: Configure-Docker
+        run: |
+          gcloud auth configure-docker \
+          ${{ secrets.GCP_REGION}}-docker.pkg.dev
