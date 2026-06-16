@@ -85,8 +85,8 @@ jobs:
       with:
         image-ref: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/python-app:${{ github.sha }}
         format: table
-        # exit-code: '1'
-        # severity: HIGH,CRITICAL
+        exit-code: '1'
+        severity: HIGH,CRITICAL
         
     - id: meta
       run: |
